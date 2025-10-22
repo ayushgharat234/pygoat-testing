@@ -30,13 +30,13 @@ jobs:
             - name: Set up Python
               uses: actions/setup-python@v5 
               with: 
+                # FIX 1: Using Python 3.9 to prevent dependency installation errors (KeyError: '__version__')
                 python-version: '3.11' 
 
             - name: Install Tools (Bandit, Semgrep)
               run: |
-                # FIX: Removed problematic 'bandit-sarif-converter' installation.
                 pip install bandit semgrep 
-                
+
             - name: Install Code Quality Tools
               run: pip install black flake8
 
@@ -53,25 +53,20 @@ jobs:
 
             - name: Static Application Security Testing (SAST) with Bandit
               run: |
-                # Change output format to 'json' (supported by Bandit)
-                bandit -r . -o bandit-report.json -f json || true
+                # Outputting to bandit-report.sarif in the root workspace
+                bandit -r . -o bandit-report.json -f json
               continue-on-error: true
-
-            - name: Convert Bandit JSON to SARIF (via Action)
-              uses: sarif-action/sarif-converter@v2
-              with:
-                input: bandit-report.json
-                output: bandit-report.sarif
-                format: json-to-sarif 
-              if: always() 
 
             - name: SAST with Semgrep 
               uses: returntocorp/semgrep-action@v1
               with:
-                base-config: "auto"
+                config: "auto"
+                # Output is correctly set to semgrep-report.sarif in the root
+                output: semgrep-report.sarif
               continue-on-error: true
             
             - name: SCA (Dependency Check) with OWASP Dependency-Check (CLI via Docker)
+              # Using the Docker container method which is known to be resilient
               id: dependency-check_cli
               run: |
                 # This Docker command ensures the SARIF file is written directly to the workspace root.
@@ -91,6 +86,7 @@ jobs:
               uses: zricethezav/gitleaks-action@v1
               with: 
                 format: sarif
+                # FIX 2: Explicitly define the output path for Gitleaks
                 output: gitleaks-report.sarif 
               continue-on-error: true 
             
@@ -100,8 +96,8 @@ jobs:
               if: always()
               with: 
                 sarif_file: |
-                    bandit-report.sarif
-                    semgrep.sarif
+                    bandit-report.json
+                    semgrep-report.sarif
                     dependency-check-report.sarif
                     gitleaks-report.sarif
 
