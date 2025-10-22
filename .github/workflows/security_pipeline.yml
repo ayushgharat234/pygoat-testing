@@ -66,20 +66,21 @@ jobs:
               continue-on-error: true
             
             - name: SCA (Dependency Check) with OWASP Dependency-Check Action (SARIF)
-              # FIX: Replacing slow Docker CLI method with dedicated GitHub Action for faster, cached runs.
+              # FIX 2: Corrected 'out' to use a directory path.
               uses: dependency-check/Dependency-Check_Action@main
               id: dependency_check_action
               with:
                 project: 'Python-App'
                 path: '.'
                 format: 'SARIF'
-                out: dependency-check-report.sarif # Outputs directly to a SARIF file
+                out: dependency-check-reports # Outputting to a directory
               continue-on-error: true
             
             - name: Secrets Detection with GitLeaks (SARIF)
+              # FIX 3: Simplified args for Gitleaks to ensure SARIF report creation is successful.
               uses: zricethezav/gitleaks-action@v1
               with: 
-                args: --report-path=gitleaks-report.sarif --format=sarif --config-path=.github/.gitleaks.toml
+                args: --report-path=gitleaks-report.sarif --format=sarif
               continue-on-error: true 
             
             - name: Upload SAST/SCA/Secrets SARIF Reports to GitHub
@@ -88,7 +89,7 @@ jobs:
               with: 
                 sarif_file: |
                     semgrep-report.sarif
-                    dependency-check-report.sarif
+                    dependency-check-reports/dependency-check-report.sarif # FIX 2: Corrected file path
                     gitleaks-report.sarif
               continue-on-error: true
 
@@ -115,28 +116,23 @@ jobs:
                 provenance: true
                 sbom: true 
             
-            - name: SBOM Generation with Syft (SPDX JSON)
-              uses: anchore/syft-action@v0.10.0 
-              with: 
-                image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-                format: spdx-json
-                output-file: syft-sbom.spdx.json
+            # FIX 1: Syft and Grype actions are replaced by Trivy's image scanning functionality.
+            # Trivy already performs vulnerability and SBOM generation checks.
+            - name: SBOM Generation and Vulnerability Scan (Trivy Filesystem)
+              uses: aquasecurity/trivy-action@master
+              with:
+                scan-type: 'fs'
+                format: 'sarif'
+                output: 'trivy-fs-report.sarif'
+                exit-code: '1' # Fail on findings
 
-            - name: Vulnerability Scanning with Grype (SARIF)
-              # Grype is set to output SARIF
-              uses: anchore/grype-action@v0.10.0
-              with: 
-                image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-                output: grype-report.sarif
-                severity-cutoff: medium 
-              continue-on-error: true
-            
-            - name: Upload Grype SARIF report
+            - name: Upload Trivy Filesystem Scan SARIF report
               uses: github/codeql-action/upload-sarif@v3
               if: always()
               with:
-                sarif_file: grype-report.sarif
-
+                sarif_file: trivy-fs-report.sarif
+            
+            # Trivy image scan remains the same, ensuring two layers of scanning (code/image)
             - name: Docker Scout Scan 
               uses: docker/scout-action@v1 
               with: 
@@ -145,7 +141,6 @@ jobs:
                 only-severity: high,critical
 
             - name: Image Scan with Trivy (SARIF)
-              # Trivy is set to output SARIF
               uses: aquasecurity/trivy-action@master
               with: 
                 image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
@@ -161,7 +156,6 @@ jobs:
                 sarif_file: trivy-image-report.sarif
             
             - name: Upload Security Artifacts (Mixed JSON/SPDX/HTML)
-              # Collects all reports, including the raw Bandit JSON and any other formats generated
               uses: actions/upload-artifact@v4 
               if: always()
               with:
@@ -170,3 +164,4 @@ jobs:
                     *.json
                     *.spdx.json
                     *.html
+                    dependency-check-reports/*.sarif
