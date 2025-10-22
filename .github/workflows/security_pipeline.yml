@@ -30,13 +30,12 @@ jobs:
             - name: Set up Python
               uses: actions/setup-python@v5 
               with: 
-                # FIX 1: Using Python 3.9 to prevent dependency installation errors (KeyError: '__version__')
                 python-version: '3.11' 
 
             - name: Install Tools (Bandit, Semgrep)
               run: |
                 pip install bandit semgrep 
-
+                
             - name: Install Code Quality Tools
               run: pip install black flake8
 
@@ -51,25 +50,23 @@ jobs:
             - name: Install Project Dependencies
               run: pip install -r requirements.txt
 
-            - name: Static Application Security Testing (SAST) with Bandit
+            - name: Static Application Security Testing (SAST) with Bandit (JSON)
               run: |
-                # Outputting to bandit-report.sarif in the root workspace
-                bandit -r . -o bandit-report.json -f json
+                # Bandit outputs JSON (not SARIF natively)
+                bandit -r . -o bandit-report.json -f json || true
               continue-on-error: true
-
-            - name: SAST with Semgrep 
+            
+            - name: SAST with Semgrep (SARIF Output)
               uses: returntocorp/semgrep-action@v1
               with:
                 config: "auto"
-                # Output is correctly set to semgrep-report.sarif in the root
                 output: semgrep-report.sarif
               continue-on-error: true
             
-            - name: SCA (Dependency Check) with OWASP Dependency-Check (CLI via Docker)
-              # Using the Docker container method which is known to be resilient
+            - name: SCA (Dependency Check) with OWASP Dependency-Check (SARIF via Docker)
               id: dependency-check_cli
               run: |
-                # This Docker command ensures the SARIF file is written directly to the workspace root.
+                # Dependency Check outputs SARIF
                 docker run --rm \
                   -v ${{ github.workspace }}:/src \
                   -v /tmp/dependency-check-data:/usr/share/dependency-check/data \
@@ -79,24 +76,21 @@ jobs:
                   --out /src \
                   --project 'Python-App' \
                   --reportname dependency-check-report \
-                  --failOnCVSS 0 # Do not fail on findings
+                  --failOnCVSS 0 
               continue-on-error: true
             
-            - name: Secrets Detection with GitLeaks 
+            - name: Secrets Detection with GitLeaks (SARIF)
               uses: zricethezav/gitleaks-action@v1
               with: 
                 format: sarif
-                # FIX 2: Explicitly define the output path for Gitleaks
                 output: gitleaks-report.sarif 
               continue-on-error: true 
             
-            - name: Upload SAST/SCA/Secrets SARIF Reports
-              # Combining all uploads into one step
+            - name: Upload SAST/SCA/Secrets SARIF Reports to GitHub
               uses: github/codeql-action/upload-sarif@v3 
               if: always()
               with: 
                 sarif_file: |
-                    bandit-report.json
                     semgrep-report.sarif
                     dependency-check-report.sarif
                     gitleaks-report.sarif
@@ -124,14 +118,14 @@ jobs:
                 provenance: true
                 sbom: true 
             
-            - name: SBOM Generation with Syft 
+            - name: SBOM Generation with Syft (SPDX JSON)
               uses: anchore/syft-action@v0.12.0 
               with: 
                 image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
                 format: spdx-json
                 output-file: syft-sbom.spdx.json
 
-            - name: Vulnerability Scanning with Grype 
+            - name: Vulnerability Scanning with Grype (SARIF)
               uses: anchore/grype-action@v0.10.0
               with: 
                 image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
@@ -152,7 +146,7 @@ jobs:
                 image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
                 only-severity: high,critical
 
-            - name: Image Scan with Trivy 
+            - name: Image Scan with Trivy (SARIF)
               uses: aquasecurity/trivy-action@master
               with: 
                 image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
@@ -167,11 +161,12 @@ jobs:
               with:
                 sarif_file: trivy-image-report.sarif
             
-            - name: Upload Security Artifacts 
+            - name: Upload Security Artifacts (Mixed JSON/SPDX/HTML)
               uses: actions/upload-artifact@v4 
               if: always()
               with:
                 name: security-reports 
                 path: |
-                    *.sarif
                     *.json
+                    *.spdx.json
+                    *.html
