@@ -167,12 +167,19 @@ jobs:
               with:
                 sarif_file: trivy-fs-report.sarif
 
-            - name: Docker Scout Scan
+            - name: Conditional Docker Scout Scan
+              if: ${{ secrets.DOCKERHUB_USER != '' && secrets.DOCKERHUB_PASSWORD != '' }}
               uses: docker/scout-action@v1
               with:
                 command: cves
                 image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
                 only-severities: high,critical
+                dockerhub-user: ${{ secrets.DOCKERHUB_USER }}
+                dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+                summary: true
+                format: json
+                write-comment: false
+
 
             - name: Image Scan with Trivy (SARIF)
               uses: aquasecurity/trivy-action@master
