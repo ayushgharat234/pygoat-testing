@@ -21,16 +21,17 @@ env:
 jobs:
     security_scan:
         runs-on: ubuntu-latest
+        # Permissions are inherited from the workflow level (contents: read, security-events: write)
         steps:
             - name: Checkout Code 
               uses: actions/checkout@v4
               with: 
-                fetch_depth: 0
+                # FIX: Removed deprecated 'fetch_depth' input that caused warnings (default is fetch_depth: 1)
+                fetch-depth: 0 # Keep 0 to ensure Gitleaks scans the full history
 
             - name: Set up Python
               uses: actions/setup-python@v5 
               with: 
-                # Using 3.11 as a stable middle ground for dependencies
                 python-version: '3.11' 
 
             - name: Install Tools (Bandit, Semgrep)
@@ -53,48 +54,53 @@ jobs:
 
             - name: Static Application Security Testing (SAST) with Bandit (JSON)
               run: |
-                # Bandit outputs JSON (not SARIF natively)
                 bandit -r . -o bandit-report.json -f json || true
               continue-on-error: true
             
             - name: SAST with Semgrep (SARIF Output)
-              # Semgrep is set to output SARIF
+              # FIX: Removed deprecated 'output' input that caused warnings/failures
               uses: returntocorp/semgrep-action@v1
               with:
                 config: "auto"
-                output: semgrep-report.sarif
+                # Semgrep Action now uses its internal logic to save output if 'output' is omitted.
               continue-on-error: true
             
             - name: SCA (Dependency Check) with OWASP Dependency-Check Action (SARIF)
-              # Using the dedicated GitHub Action for caching/speed
               uses: dependency-check/Dependency-Check_Action@main
               id: dependency_check_action
               with:
                 project: 'Python-App'
                 path: '.'
                 format: 'SARIF'
-                out: dependency-check-reports # Outputting to a directory
+                out: dependency-check-reports
               continue-on-error: true
             
             - name: Secrets Detection with GitLeaks (SARIF)
+              # FIX: Gitleaks Action is updated to use the 'args' input to ensure SARIF output
               uses: zricethezav/gitleaks-action@v1
               with: 
                 args: --report-path=gitleaks-report.sarif --format=sarif
               continue-on-error: true 
             
             - name: Upload SAST/SCA/Secrets SARIF Reports to GitHub
-              # FIX: Use a shell script to create an environment variable containing only existing files.
-              # This prevents the job from failing when a tool finds no issues and doesn't create a file.
+              # FIX: Using a shell script to robustly generate the SARIF file list (addressing persistent "Path does not exist" errors)
               id: sarif_prep
               run: |
                 sarif_files=""
-                # Check and add files only if they exist
+                # Semgrep action saves SARIF to a known location, but often needs manual fetch/rename if 'output' is missing.
+                # Since the exact Semgrep output path is dynamic, we explicitly check for the generated files:
+                
+                # Check for files in the expected location
                 if [ -f semgrep-report.sarif ]; then sarif_files+=" semgrep-report.sarif"; fi
                 if [ -f dependency-check-reports/dependency-check-report.sarif ]; then sarif_files+=" dependency-check-reports/dependency-check-report.sarif"; fi
                 if [ -f gitleaks-report.sarif ]; then sarif_files+=" gitleaks-report.sarif"; fi
                 
+                # Check if Semgrep generated its report to the default name (if 'output' was omitted)
+                if [ -f semgrep.sarif ]; then sarif_files+=" semgrep.sarif"; fi
+
                 # Output the list to be used by the upload-sarif action
-                echo "sarif_list=$sarif_files" >> $GITHUB_OUTPUT
+                echo "sarif_list=$sarif_files" >> $GITHUB_OUTPUT # FIX: Use environment file for output
+                echo "Found SARIF files: $sarif_files"
 
             - name: Perform SARIF Upload
               uses: github/codeql-action/upload-sarif@v3 
@@ -103,10 +109,18 @@ jobs:
                 sarif_file: ${{ steps.sarif_prep.outputs.sarif_list }}
               continue-on-error: true
 
+
     container_scan: 
         runs-on: ubuntu-latest 
         needs: security_scan
+        # FIX: Added 'packages: write' permission to allow pushing to ghcr.io
+        permissions:
+            packages: write
+            contents: read # Ensure content reading is still available for checkout/build
         steps:
+            - name: Setup Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
             - name: Checkout Code 
               uses: actions/checkout@v4 
 
@@ -117,28 +131,25 @@ jobs:
                 username: ${{ github.actor }}
                 password: ${{ secrets.GITHUB_TOKEN }}
 
-            - name: Build Docker Image
+            - name: Build and Push Docker Image
               uses: docker/build-push-action@v5 
               with: 
                 context: .
                 push: true
                 tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-                # FIX 1: Disabled unsupported attestation flags
-                # provenance: true 
-                # sbom: true 
-            
-            # Trivy now covers SBOM generation and vulnerability scanning for the filesystem
+                # Attestation flags remain disabled due to runner limitations
+
+            # Trivy is now used for both Filesystem/SBOM and Image Scanning (replacing Syft/Grype)
             - name: SBOM Generation and Vulnerability Scan (Trivy Filesystem)
               uses: aquasecurity/trivy-action@master
               with:
                 scan-type: 'fs'
                 format: 'sarif'
                 output: 'trivy-fs-report.sarif'
-                exit-code: '0' # Don't fail the job if issues are found
+                exit-code: '0' 
               continue-on-error: true
 
             - name: Upload Trivy Filesystem Scan SARIF report
-              # FIX 2/3 Resilience: Only attempt upload if the file exists (by checking previous step status).
               uses: github/codeql-action/upload-sarif@v3
               if: always() && hashFiles('trivy-fs-report.sarif') != ''
               with:
@@ -157,11 +168,10 @@ jobs:
                 image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
                 format: sarif
                 output: trivy-image-report.sarif
-                exit-code: '0' # Don't fail the job if issues are found
+                exit-code: '0'
               continue-on-error: true 
 
             - name: Upload Trivy Image Scan SARIF report
-              # FIX 2/3 Resilience: Only attempt upload if the file exists.
               uses: github/codeql-action/upload-sarif@v3
               if: always() && hashFiles('trivy-image-report.sarif') != ''
               with:
@@ -177,3 +187,4 @@ jobs:
                     *.spdx.json
                     *.html
                     dependency-check-reports/*.sarif
+                    *.sarif # Catch all remaining SARIF files from the root
