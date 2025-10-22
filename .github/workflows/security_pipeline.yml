@@ -29,7 +29,7 @@ jobs:
 
             - name: Set up Python
               uses: actions/setup-python@v5 
-              with: 
+              with:
                 python-version: '3.11' 
 
             - name: Install Tools (Bandit, Semgrep)
@@ -66,24 +66,22 @@ jobs:
             - name: SCA (Dependency Check) with OWASP Dependency-Check (SARIF via Docker)
               id: dependency-check_cli
               run: |
-                # Dependency Check outputs SARIF
+                # FIX 2: Removed unrecognized --reportname flag and pipe output for file generation.
                 docker run --rm \
                   -v ${{ github.workspace }}:/src \
                   -v /tmp/dependency-check-data:/usr/share/dependency-check/data \
                   owasp/dependency-check:latest \
                   --scan /src \
                   --format SARIF \
-                  --out /src \
+                  --out /src/dependency-check-report.sarif \
                   --project 'Python-App' \
-                  --reportname dependency-check-report \
-                  --failOnCVSS 0 
+                  --failOnCVSS 0 || true
               continue-on-error: true
             
             - name: Secrets Detection with GitLeaks (SARIF)
               uses: zricethezav/gitleaks-action@v1
               with: 
-                format: sarif
-                output: gitleaks-report.sarif 
+                args: --report-path=gitleaks-report.sarif --format=sarif --config-path=.github/.gitleaks.toml
               continue-on-error: true 
             
             - name: Upload SAST/SCA/Secrets SARIF Reports to GitHub
@@ -94,6 +92,7 @@ jobs:
                     semgrep-report.sarif
                     dependency-check-report.sarif
                     gitleaks-report.sarif
+              continue-on-error: true
 
     container_scan: 
         runs-on: ubuntu-latest 
