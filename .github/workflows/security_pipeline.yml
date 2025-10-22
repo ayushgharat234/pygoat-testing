@@ -30,12 +30,14 @@ jobs:
             - name: Set up Python
               uses: actions/setup-python@v5 
               with: 
-                # FIX 1: Using Python 3.9 to prevent dependency installation errors (KeyError: '__version__')
+                # Using Python 3.9 to prevent dependency installation errors (KeyError: '__version__')
                 python-version: '3.9' 
 
-            - name: Install Tools (Bandit, Semgrep)
+            - name: Install Tools (Bandit, Semgrep, SARIF Converter)
               run: |
                 pip install bandit semgrep 
+                # Install the tool needed to convert JSON reports to SARIF (bandit-sarif-converter)
+                pip install bandit-sarif-converter
 
             - name: Install Code Quality Tools
               run: pip install black flake8
@@ -53,16 +55,22 @@ jobs:
 
             - name: Static Application Security Testing (SAST) with Bandit
               run: |
-                # Outputting to bandit-report.sarif in the root workspace
-                bandit -r . -o bandit-report.sarif -f sarif
+                # FIX 1a: Change output format to 'json' (supported by Bandit)
+                bandit -r . -o bandit-report.json -f json || true
               continue-on-error: true
 
+            - name: Convert Bandit JSON to SARIF
+              # FIX 1b: Convert the JSON report to the required SARIF format
+              run: bandit-sarif-converter --input bandit-report.json --output bandit-report.sarif
+              if: success() || failure()
+
             - name: SAST with Semgrep 
+              # FIX 2: Removed deprecated 'output' input and use base-config for sarif generation
               uses: returntocorp/semgrep-action@v1
               with:
-                config: "auto"
-                # Output is correctly set to semgrep-report.sarif in the root
-                output: semgrep-report.sarif
+                # Use base-config for simple configuration and SARIF output
+                base-config: "auto"
+                # The output file will be named 'semgrep.sarif' by default by the action
               continue-on-error: true
             
             - name: SCA (Dependency Check) with OWASP Dependency-Check (CLI via Docker)
@@ -86,7 +94,7 @@ jobs:
               uses: zricethezav/gitleaks-action@v1
               with: 
                 format: sarif
-                # FIX 2: Explicitly define the output path for Gitleaks
+                # Output is correctly set to gitleaks-report.sarif
                 output: gitleaks-report.sarif 
               continue-on-error: true 
             
@@ -97,7 +105,7 @@ jobs:
               with: 
                 sarif_file: |
                     bandit-report.sarif
-                    semgrep-report.sarif
+                    semgrep.sarif # FIX 3: Changed file name to default 'semgrep.sarif'
                     dependency-check-report.sarif
                     gitleaks-report.sarif
 
