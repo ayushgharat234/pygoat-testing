@@ -167,12 +167,12 @@ jobs:
               with:
                 sarif_file: trivy-fs-report.sarif
 
-            - name: Docker Scout Scan 
-              uses: docker/scout-action@v1 
-              with: 
-                command: cves 
+            - name: Docker Scout Scan
+              uses: docker/scout-action@v1
+              with:
+                command: cves
                 image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-                only-severity: high,critical
+                only-severities: high,critical
 
             - name: Image Scan with Trivy (SARIF)
               uses: aquasecurity/trivy-action@master
