@@ -29,7 +29,8 @@ jobs:
 
             - name: Set up Python
               uses: actions/setup-python@v5 
-              with:
+              with: 
+                # Using 3.11 as a stable middle ground for dependencies
                 python-version: '3.11' 
 
             - name: Install Tools (Bandit, Semgrep)
@@ -57,25 +58,22 @@ jobs:
               continue-on-error: true
             
             - name: SAST with Semgrep (SARIF Output)
+              # Semgrep is set to output SARIF
               uses: returntocorp/semgrep-action@v1
               with:
                 config: "auto"
                 output: semgrep-report.sarif
               continue-on-error: true
             
-            - name: SCA (Dependency Check) with OWASP Dependency-Check (SARIF via Docker)
-              id: dependency-check_cli
-              run: |
-                # FIX 2: Removed unrecognized --reportname flag and pipe output for file generation.
-                docker run --rm \
-                  -v ${{ github.workspace }}:/src \
-                  -v /tmp/dependency-check-data:/usr/share/dependency-check/data \
-                  owasp/dependency-check:latest \
-                  --scan /src \
-                  --format SARIF \
-                  --out /src/dependency-check-report.sarif \
-                  --project 'Python-App' \
-                  --failOnCVSS 0 || true
+            - name: SCA (Dependency Check) with OWASP Dependency-Check Action (SARIF)
+              # FIX: Replacing slow Docker CLI method with dedicated GitHub Action for faster, cached runs.
+              uses: dependency-check/Dependency-Check_Action@main
+              id: dependency_check_action
+              with:
+                project: 'Python-App'
+                path: '.'
+                format: 'SARIF'
+                out: dependency-check-report.sarif # Outputs directly to a SARIF file
               continue-on-error: true
             
             - name: Secrets Detection with GitLeaks (SARIF)
@@ -125,6 +123,7 @@ jobs:
                 output-file: syft-sbom.spdx.json
 
             - name: Vulnerability Scanning with Grype (SARIF)
+              # Grype is set to output SARIF
               uses: anchore/grype-action@v0.10.0
               with: 
                 image: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
@@ -146,6 +145,7 @@ jobs:
                 only-severity: high,critical
 
             - name: Image Scan with Trivy (SARIF)
+              # Trivy is set to output SARIF
               uses: aquasecurity/trivy-action@master
               with: 
                 image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
@@ -161,6 +161,7 @@ jobs:
                 sarif_file: trivy-image-report.sarif
             
             - name: Upload Security Artifacts (Mixed JSON/SPDX/HTML)
+              # Collects all reports, including the raw Bandit JSON and any other formats generated
               uses: actions/upload-artifact@v4 
               if: always()
               with:
