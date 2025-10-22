@@ -9,6 +9,7 @@ on:
             - master
 
 permissions:
+    # Global permissions (used if job permissions are not set)
     contents: read
     security-events: write
     actions: read
@@ -21,12 +22,14 @@ env:
 jobs:
     security_scan:
         runs-on: ubuntu-latest
-        # Permissions are inherited from the workflow level (contents: read, security-events: write)
+        # FIX 1: Explicitly defining permissions at the job level is REQUIRED for SARIF uploads to work reliably.
+        permissions:
+            contents: read
+            security-events: write
         steps:
             - name: Checkout Code 
               uses: actions/checkout@v4
               with: 
-                # FIX: Removed deprecated 'fetch_depth' input that caused warnings (default is fetch_depth: 1)
                 fetch-depth: 0 # Keep 0 to ensure Gitleaks scans the full history
 
             - name: Set up Python
@@ -58,11 +61,11 @@ jobs:
               continue-on-error: true
             
             - name: SAST with Semgrep (SARIF Output)
-              # FIX: Removed deprecated 'output' input that caused warnings/failures
               uses: returntocorp/semgrep-action@v1
               with:
                 config: "auto"
-                # Semgrep Action now uses its internal logic to save output if 'output' is omitted.
+                # FIX 3: Explicitly define output file name for reliability
+                output: semgrep-report.sarif 
               continue-on-error: true
             
             - name: SCA (Dependency Check) with OWASP Dependency-Check Action (SARIF)
@@ -76,30 +79,23 @@ jobs:
               continue-on-error: true
             
             - name: Secrets Detection with GitLeaks (SARIF)
-              # FIX: Gitleaks Action is updated to use the 'args' input to ensure SARIF output
               uses: zricethezav/gitleaks-action@v1
               with: 
                 args: --report-path=gitleaks-report.sarif --format=sarif
               continue-on-error: true 
             
             - name: Upload SAST/SCA/Secrets SARIF Reports to GitHub
-              # FIX: Using a shell script to robustly generate the SARIF file list (addressing persistent "Path does not exist" errors)
               id: sarif_prep
               run: |
                 sarif_files=""
-                # Semgrep action saves SARIF to a known location, but often needs manual fetch/rename if 'output' is missing.
-                # Since the exact Semgrep output path is dynamic, we explicitly check for the generated files:
                 
-                # Check for files in the expected location
+                # Check for files and build list (now using the explicitly defined names)
                 if [ -f semgrep-report.sarif ]; then sarif_files+=" semgrep-report.sarif"; fi
                 if [ -f dependency-check-reports/dependency-check-report.sarif ]; then sarif_files+=" dependency-check-reports/dependency-check-report.sarif"; fi
                 if [ -f gitleaks-report.sarif ]; then sarif_files+=" gitleaks-report.sarif"; fi
                 
-                # Check if Semgrep generated its report to the default name (if 'output' was omitted)
-                if [ -f semgrep.sarif ]; then sarif_files+=" semgrep.sarif"; fi
-
                 # Output the list to be used by the upload-sarif action
-                echo "sarif_list=$sarif_files" >> $GITHUB_OUTPUT # FIX: Use environment file for output
+                echo "sarif_list=$sarif_files" >> $GITHUB_OUTPUT 
                 echo "Found SARIF files: $sarif_files"
 
             - name: Perform SARIF Upload
@@ -109,15 +105,31 @@ jobs:
                 sarif_file: ${{ steps.sarif_prep.outputs.sarif_list }}
               continue-on-error: true
 
+            - name: Publish Pre-Build Artifacts for Container Job
+              # FIX 4: Explicitly publish reports so the next job can download them.
+              uses: actions/upload-artifact@v4
+              with:
+                  name: pre-build-reports
+                  path: |
+                      *.json
+                      dependency-check-reports/
 
     container_scan: 
         runs-on: ubuntu-latest 
         needs: security_scan
-        # FIX: Added 'packages: write' permission to allow pushing to ghcr.io
+        # FIX 1: Explicitly defining permissions at the job level.
         permissions:
             packages: write
-            contents: read # Ensure content reading is still available for checkout/build
+            contents: write # Need write permissions to download artifacts
+            security-events: write # Need security-events permission for SARIF uploads
         steps:
+            - name: Download Pre-Build Reports
+              # FIX 4: Download artifacts from the previous job
+              uses: actions/download-artifact@v4
+              with:
+                  name: pre-build-reports
+                  path: . # Download to current workspace for later artifact upload
+            
             - name: Setup Docker Buildx
               uses: docker/setup-buildx-action@v3
 
@@ -178,6 +190,7 @@ jobs:
                 sarif_file: trivy-image-report.sarif
             
             - name: Upload Security Artifacts (Mixed JSON/SPDX/HTML)
+              # This step now uploads all new reports AND the reports downloaded from the previous job.
               uses: actions/upload-artifact@v4 
               if: always()
               with:
@@ -187,4 +200,4 @@ jobs:
                     *.spdx.json
                     *.html
                     dependency-check-reports/*.sarif
-                    *.sarif # Catch all remaining SARIF files from the root
+                    *.sarif
